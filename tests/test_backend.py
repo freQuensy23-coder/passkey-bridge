@@ -217,28 +217,39 @@ async def test_backend_rejects_invalid_assertion_from_transport(monkeypatch):
         await backend.authenticate(request(), confirm=False)
 
 
-def _wait_for_stderr(process, marker):
+def _wait_for_output(fd, marker):
     output = bytearray()
     deadline = time.monotonic() + 5
     while marker not in output:
         remaining = deadline - time.monotonic()
         assert remaining > 0, bytes(output)
-        readable, _, _ = select.select([process.stderr], [], [], remaining)
+        readable, _, _ = select.select([fd], [], [], remaining)
         assert readable, bytes(output)
-        chunk = os.read(process.stderr.fileno(), 4096)
+        chunk = os.read(fd, 4096)
         assert chunk, bytes(output)
         output.extend(chunk)
     return bytes(output)
 
 
 @pytest.mark.parametrize("cancel_at", [None, "consent", "radio"])
-def test_simulated_backend_subprocess_success_and_sigterm_cleanup(cancel_at):
+@pytest.mark.parametrize("reject_terminal_reader", [False, True])
+def test_simulated_backend_subprocess_success_and_sigterm_cleanup(cancel_at, reject_terminal_reader):
     master, slave = pty.openpty()
     source = """
 import asyncio
+import errno
 import hashlib
+import os
 import sys
 from passkey_bridge import backend
+
+if sys.argv[2] == "reject_terminal_reader":
+    original_add_reader = asyncio.SelectorEventLoop.add_reader
+    def add_reader(self, fd, callback, *args):
+        if os.isatty(fd):
+            raise OSError(errno.EINVAL, "Invalid argument")
+        return original_add_reader(self, fd, callback, *args)
+    asyncio.SelectorEventLoop.add_reader = add_reader
 
 async def simulated_radio(context):
     print("SIMULATED_RADIO_ACTIVE", file=sys.stderr, flush=True)
@@ -259,19 +270,21 @@ raise SystemExit(backend._main())
     def controlling_terminal():
         os.setsid()
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-    process = subprocess.Popen([sys.executable, "-c", source, cancel_at or "success"],
+    process = subprocess.Popen([sys.executable, "-c", source, cancel_at or "success",
+        "reject_terminal_reader" if reject_terminal_reader else "native"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         preexec_fn=controlling_terminal, pass_fds=(slave,))
     try:
         process.stdin.write(json.dumps(request()).encode() + b"\n")
         process.stdin.flush()
-        observed = _wait_for_stderr(process, b"Type yes to allow this request")
+        observed = _wait_for_output(process.stderr.fileno(), b"Type yes to allow this request")
         assert b"Origin: https://login.microsoft.com" in observed
         assert b"RP ID: login.microsoft.com" in observed
         if cancel_at != "consent":
             os.write(master, b"yes\n")
+            assert _wait_for_output(master, b"yes\r\n") == b"yes\r\n"
         if cancel_at == "radio":
-            observed += _wait_for_stderr(process, b"SIMULATED_RADIO_ACTIVE")
+            observed += _wait_for_output(process.stderr.fileno(), b"SIMULATED_RADIO_ACTIVE")
         if cancel_at:
             process.terminate()
         stdout, stderr = process.communicate(timeout=5)
@@ -290,8 +303,8 @@ raise SystemExit(backend._main())
         else:
             assert b"SIMULATED_RADIO_CLOSED" in observed
     finally:
+        os.close(master)
+        os.close(slave)
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=5)
-        os.close(master)
-        os.close(slave)

@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
+import errno
 import hashlib
 import hmac
 import io
 import json
 import os
 import secrets
+import select
 import signal
 import sys
 import time
@@ -216,6 +218,7 @@ async def _confirm(context):
     loop = asyncio.get_running_loop()
     answer = loop.create_future()
     pending = bytearray()
+    reader_installed = False
     def ready():
         if answer.done():
             return
@@ -236,14 +239,26 @@ async def _confirm(context):
             answer.set_result(bytes(pending))
     try:
         termios.tcflush(terminal, termios.TCIFLUSH)
+        try:
+            loop.add_reader(terminal, ready)
+            reader_installed = True
+        except OSError as exc:
+            if exc.errno != errno.EINVAL:
+                raise
         print(f"\nPasskey sign-in\nOrigin: {context['origin']}\nRP ID: {context['rp_id']}\nType yes to allow this request: ",
             file=sys.stderr, end="", flush=True)
-        loop.add_reader(terminal, ready)
+        if not reader_installed:
+            while not answer.done():
+                if select.select([terminal], [], [], 0)[0]:
+                    ready()
+                if not answer.done():
+                    await asyncio.sleep(0.05)
         response = await answer
         if response != b"yes\n":
             raise BackendError("Local consent refused")
     finally:
-        loop.remove_reader(terminal)
+        if reader_installed:
+            loop.remove_reader(terminal)
         with contextlib.suppress(OSError, termios.error):
             termios.tcflush(terminal, termios.TCIFLUSH)
         os.close(terminal)
