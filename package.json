@@ -1,0 +1,11 @@
+{
+  "name": "passkey-bridge-browser-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/extension.test.mjs"
+  },
+  "devDependencies": {
+    "@puppeteer/browsers": "3.2.6",
+    "playwright-core": "1.64.1"
+  }
+}

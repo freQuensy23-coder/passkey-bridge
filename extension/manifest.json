@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Passkey Bridge",
+  "version": "0.1.0",
+  "description": "Forward explicitly approved passkey assertions through your paired local companion.",
+  "minimum_chrome_version": "115",
+  "permissions": ["webAuthenticationProxy", "storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "worker.js" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "action": { "default_popup": "options.html", "default_title": "Passkey Bridge" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src ws://127.0.0.1:*"
+  }
+}
