@@ -16,11 +16,17 @@ The real socket/stdio relay tests start an actual subprocess and WebSocket broke
 
 Python wheel and source distribution were built. The wheel includes extension assets, vendored source, provenance and third-party license. Linux and macOS/Python-version CI checks are defined for automatic execution on push and pull request.
 
+## Executed on the user's Mac (2026-10-25)
+
+One real phone-passkey sign-in completed from macOS 26.6.2 (Apple Silicon, Python 3.13) through the SSH bridge to the isolated remote Chrome for Testing session. The companion received and authenticated the phone's BLE advertisement, established TLS and Noise, sent CTAP GetAssertion and validated the returned assertion. The extension recorded a signed helper response with the same ID as the original `login.microsoft.com` request. The original remote browser then loaded Outlook's mailbox with the expected user's name in the page title; the user also reported successful sign-in on the phone.
+
+This run used the service-data discovery and advertisement-suffix fixes. It establishes that this specific physical path worked; the phone model and credential-provider app were not independently recorded. It does not establish interoperability for every phone/provider or an Azure/Foundry capability grant. Session codes, QR data, account identifiers and assertion contents are excluded from public evidence.
+
+The updated source passed 160 Python tests on this Mac (three dedicated Chrome integration cases skipped), lint and wheel/source builds. The existing Chrome integration coverage described above is from the earlier revision, not a new browser-fixture run for this patch.
+
 ## Not yet established
 
-**Physical Microsoft Authenticator / Azure sign-in: NOT RUN.** It requires the user's nearby Mac and registered phone credential. No assertion of account-level login success is made.
-
-**Physical macOS Bluetooth runtime: NOT RUN on the development host.** macOS CI validates package execution/imports and the software tests, not a real nearby phone. Do not call a CoreBluetooth import a BLE hardware test.
+**Azure/Foundry capability access: NOT RUN in this hardware test.** Outlook sign-in does not establish account entitlement to a separate service. Provider-specific Microsoft Authenticator compatibility also needs a run with the phone/provider explicitly identified.
 
 ## Hardware acceptance
 

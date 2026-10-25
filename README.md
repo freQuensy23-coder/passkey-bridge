@@ -60,6 +60,8 @@ Start Microsoft sign-in in the remote browser and select the passkey method. The
 
 Disconnect in extension options or stop the terminal command to end the session. Canceling a browser request terminates its local authenticator subprocess, including its prompt, BLE scanner and network connection.
 
+For connection troubleshooting, run the companion with `PASSKEY_BRIDGE_DEBUG=1`. It prints timestamps for Bluetooth discovery, the TLS/Noise tunnel, phone approval and assertion validation to stderr. The added diagnostics contain only stage names and advertisement counts, without device identifiers, QR secrets, tunnel URLs or assertion contents. Scan a fresh QR promptly while the requesting browser is still waiting.
+
 ## Boundaries
 
 Microsoft login origins are explicitly allowlisted by the companion. Requests must carry the real browser's remoteDesktopClientOverride with same-origin ancestors. Public-suffix-aware RP validation, bounded challenges, canonical base64url, supported extensions, matching RP hashes/credential IDs and required authenticator flags are checked. Unknown account policies remain authoritative; the bridge cannot make an otherwise disallowed server/device compliant.
