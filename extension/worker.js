@@ -58,12 +58,36 @@ function status() {
   };
 }
 
-function complete(id, result) {
+async function complete(id, result) {
   const request = pending.get(id);
-  if (!request) return;
+  if (!request || request.completing) return;
+  request.completing = true;
   clearTimeout(request.timer);
-  pending.delete(id);
-  quiet(() => proxy.completeGetRequest({ requestId: id, ...result }));
+  request.timer = setTimeout(() => {
+    if (pending.get(id) !== request) return;
+    clearTimeout(request.timer);
+    pending.delete(id);
+    send(request.target, { type: 'cancel', id });
+    endSession(request.target, 'Chrome could not complete the passkey request. Reconnect to try again.');
+  }, 5000);
+  try {
+    try {
+      await proxy.completeGetRequest({ requestId: id, ...result });
+    } catch {
+      if (pending.get(id) !== request) return;
+      if (!result.responseJson) throw new Error('Error completion rejected');
+      await proxy.completeGetRequest({ requestId: id, error: exception('UnknownError') });
+    }
+  } catch {
+    if (pending.get(id) === request) {
+      endSession(request.target, 'Chrome could not complete the passkey request. Reconnect to try again.');
+    }
+  } finally {
+    if (pending.get(id) === request) {
+      clearTimeout(request.timer);
+      pending.delete(id);
+    }
+  }
 }
 
 function failPending() {
@@ -246,11 +270,12 @@ proxy.onGetRequest.addListener(request => {
   }
   const target = session;
   const timer = setTimeout(() => {
-    if (!pending.has(id)) return;
+    const request = pending.get(id);
+    if (!request) return;
     send(target, { type: 'cancel', id });
     complete(id, { error: exception('NotAllowedError') });
   }, 180000);
-  pending.set(id, { timer });
+  pending.set(id, { timer, target, completing: false });
   if (!send(target, { type: 'get', id, details })) complete(id, { error: exception('DataError') });
 });
 

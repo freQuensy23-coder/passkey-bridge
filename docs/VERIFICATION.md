@@ -2,7 +2,9 @@
 
 ## Executed on the development Linux host
 
-The complete Python suite with an explicit Chrome for Testing binary passed: **148 tests, no skips**. Separately, the MV3 worker/options lifecycle suite passed **25 tests, no failures or skips**. These counts describe the implementation snapshot before subsequent CI/review fixes; GitHub Actions is the authoritative record for the published commit.
+The latest local implementation snapshot passed **159 Python tests, no skips**, with the dedicated Chrome for Testing integration enabled. Separately, the MV3 worker/options lifecycle suite passed **31 tests, no failures or skips**. These are software-fixture results; GitHub Actions is the authoritative record for the published commit.
+
+Automatic GitHub Actions also passed the Linux/macOS Python 3.11/3.13 matrix, extension tests, package builds, macOS CoreBluetooth imports and the dedicated Chrome integration at [revision 76f7c75](https://github.com/freQuensy23-coder/passkey-bridge/actions/runs/40219254605). That revision established the native macOS terminal-consent fix; later serializer and completion-recovery changes require their own current-head CI result.
 
 The real Chrome for Testing 156 integration loaded the actual unpacked extension, authenticated a real loopback broker, attached the real webAuthenticationProxy API, intercepted a page's navigator.credentials.get, preserved the browser-provided origin override, returned a real ECDSA-signed **software test fixture** assertion and detached. It uses an isolated disposable profile and a local test relying-party origin. It does not use a physical phone or sign in to Microsoft.
 

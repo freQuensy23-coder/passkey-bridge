@@ -267,13 +267,14 @@ def test_malformed_assertions_rejected(mutation):
         protocol.validate_assertion(context, value)
 
 
-def test_preferred_uv_does_not_require_uv_and_absent_user_handle_is_null():
+def test_preferred_uv_does_not_require_uv_and_absent_user_handle_is_omitted():
     details = request()
     details["userVerification"] = "preferred"
     context = protocol.validate_request(details)
     value = assertion(flags=1)
     del value[4]
-    assert protocol.validate_assertion(context, value)["response"]["userHandle"] is None
+    response = json.loads(json.dumps(protocol.validate_assertion(context, value)))
+    assert "userHandle" not in response["response"]
 
 
 def test_discoverable_credentials_require_user_handle():

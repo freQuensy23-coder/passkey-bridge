@@ -164,12 +164,14 @@ def validate_assertion(context, assertion):
         user_handle = encode_base64url(user["id"])
     if not allowed and user_handle is None:
         raise ValidationError("Discoverable credential response requires a user handle")
+    response = {
+        "clientDataJSON": encode_base64url(context["client_data_json"]),
+        "authenticatorData": encode_base64url(auth_data), "signature": encode_base64url(signature),
+    }
+    if user_handle is not None:
+        response["userHandle"] = user_handle
     return {
         "id": encode_base64url(credential_id), "rawId": encode_base64url(credential_id),
         "type": "public-key", "authenticatorAttachment": "cross-platform", "clientExtensionResults": {},
-        "response": {
-            "clientDataJSON": encode_base64url(context["client_data_json"]),
-            "authenticatorData": encode_base64url(auth_data), "signature": encode_base64url(signature),
-            "userHandle": user_handle,
-        },
+        "response": response,
     }

@@ -38,7 +38,11 @@ async function harness({ saved, delayedAttach = false, attachError, attachResult
       if (delayedDetach && calls.detach > 1) await new Promise(resolve => detachResolvers.push(resolve));
       if (detachError && calls.detach > 1) throw new Error(detachError);
     },
-    async completeGetRequest(details) { calls.get.push(copy(details)); if (completionError) throw new Error(completionError); },
+    async completeGetRequest(details) {
+      calls.get.push(copy(details));
+      if (typeof completionError === 'function') return await completionError(details, calls.get.length);
+      if (completionError) throw new Error(completionError);
+    },
     async completeCreateRequest(details) { calls.create.push(copy(details)); },
     async completeIsUvpaaRequest(details) { calls.uvpaa.push(copy(details)); }
   };
@@ -453,15 +457,139 @@ test('failed sends close the session and do not leak token or native exception t
   assert.equal(JSON.stringify(await h.message({ type: 'status' })).includes('private-token'), false);
 });
 
-test('rejected Chrome completion promises do not leave stale pending requests or unhandled rejections', async () => {
-  const h = await harness({ completionError: 'private-token' });
+test('a rejected assertion completes the live Chrome request with a safe error', async () => {
+  const h = await harness({ completionError: value => {
+    if (value.responseJson) throw new Error('private-token');
+  } });
   const socket = await h.ready();
   get(h);
   socket.receive({ type: 'result', id: 17, response: credential });
   await tick();
+  assert.equal(h.calls.get.length, 2);
+  assert.equal(h.calls.get[1].requestId, 17);
+  assert.equal(h.calls.get[1].error.name, 'UnknownError');
+  assert.equal((await h.message({ type: 'status' })).status.pending, false);
+  assert.equal(h.timers.size, 0);
+  assert.equal(socket.closed, false);
+  assert.equal(JSON.stringify(h.calls).includes('private-token'), false);
   get(h, 18);
   assert.deepEqual(socket.sent.at(-1), { type: 'get', id: 18, details });
+});
+
+test('cancellation during response rejection preserves a newer request with the same ID', async () => {
+  let rejectResponse;
+  const h = await harness({ completionError: () => new Promise((resolve, reject) => { rejectResponse = reject; }) });
+  const socket = await h.ready();
+  get(h);
+  socket.receive({ type: 'result', id: 17, response: credential });
+  await tick();
+  assert.equal((await h.message({ type: 'status' })).status.pending, true);
+  assert.equal(h.timers.size, 1);
+  h.proxy.onRequestCanceled.emit(17);
+  assert.deepEqual(socket.sent.at(-1), { type: 'cancel', id: 17 });
+  get(h);
+  rejectResponse(new Error('request was canceled'));
+  await tick();
+  assert.equal(h.calls.get.length, 1);
+  assert.equal((await h.message({ type: 'status' })).status.pending, true);
+  assert.equal(h.timers.size, 1);
+  assert.equal(socket.closed, false);
+});
+
+test('a rejected fallback detaches once and clears pending work without unhandled rejections', async () => {
+  const h = await harness({ completionError: 'private-token' });
+  const socket = await h.ready();
+  const baseline = h.calls.detach;
+  get(h);
+  socket.receive({ type: 'result', id: 17, response: credential });
+  await tick();
+  assert.equal(h.calls.get.length, 2);
+  assert.equal(h.calls.get[1].error.name, 'UnknownError');
+  assert.equal(h.calls.detach, baseline + 1);
+  assert.equal(socket.closed, true);
+  const status = await h.message({ type: 'status' });
+  assert.equal(status.status.pending, false);
+  assert.equal(status.status.attached, false);
+  assert.equal(h.timers.size, 0);
+  assert.equal(JSON.stringify(status).includes('private-token'), false);
   assert.deepEqual(h.calls.logs, []);
+});
+
+test('cancellation during fallback rejection cannot detach a replacement session', async () => {
+  let rejectFallback;
+  const h = await harness({ completionError: value => {
+    if (value.responseJson) throw new Error('invalid response');
+    return new Promise((resolve, reject) => { rejectFallback = reject; });
+  } });
+  const first = await h.ready();
+  get(h);
+  first.receive({ type: 'result', id: 17, response: credential });
+  await tick();
+  assert.equal(h.calls.get.length, 2);
+  h.proxy.onRequestCanceled.emit(17);
+  const second = await h.ready();
+  get(h);
+  const baseline = h.calls.detach;
+  rejectFallback(new Error('canceled fallback'));
+  await tick();
+  assert.equal(second.closed, false);
+  assert.equal(h.calls.detach, baseline);
+  assert.equal((await h.message({ type: 'status' })).status.pending, true);
+  assert.equal(h.timers.size, 1);
+});
+
+test('a stalled completion keeps its watchdog and detaches at the deadline', async () => {
+  const h = await harness({ completionError: () => new Promise(() => {}) });
+  const socket = await h.ready();
+  const baseline = h.calls.detach;
+  get(h);
+  socket.receive({ type: 'result', id: 17, response: credential });
+  await tick();
+  assert.equal(h.timers.size, 1);
+  for (const timer of [...h.timers.values()]) timer.callback();
+  await tick();
+  assert.equal(h.calls.get.length, 1);
+  assert.equal(h.calls.detach, baseline + 1);
+  assert.equal(socket.closed, true);
+  assert.equal((await h.message({ type: 'status' })).status.pending, false);
+  assert.equal(h.timers.size, 0);
+});
+
+test('a stalled timeout error completion has a bounded cleanup deadline', async () => {
+  const h = await harness({ completionError: () => new Promise(() => {}) });
+  const socket = await h.ready();
+  const baseline = h.calls.detach;
+  get(h);
+  const [timerId, timer] = [...h.timers.entries()][0];
+  h.timers.delete(timerId);
+  timer.callback();
+  await tick();
+  assert.equal(h.calls.get[0].error.name, 'NotAllowedError');
+  assert.equal(h.timers.size, 1);
+  const cleanup = [...h.timers.values()][0];
+  assert.ok(cleanup.delay <= 5000);
+  cleanup.callback();
+  await tick();
+  assert.equal(h.calls.detach, baseline + 1);
+  assert.equal(socket.closed, true);
+  assert.equal((await h.message({ type: 'status' })).status.pending, false);
+  assert.equal(h.timers.size, 0);
+});
+
+test('duplicate results cannot race an in-flight Chrome completion', async () => {
+  let resolveResponse;
+  const h = await harness({ completionError: () => new Promise(resolve => { resolveResponse = resolve; }) });
+  const socket = await h.ready();
+  get(h);
+  socket.receive({ type: 'result', id: 17, response: credential });
+  socket.receive({ type: 'result', id: 17, response: credential });
+  await tick();
+  assert.equal(h.calls.get.length, 1);
+  assert.equal((await h.message({ type: 'status' })).status.pending, true);
+  resolveResponse();
+  await tick();
+  assert.equal((await h.message({ type: 'status' })).status.pending, false);
+  assert.equal(h.timers.size, 0);
 });
 
 test('oversized frames fail closed and oversized requests never reach the broker', async () => {

@@ -36,24 +36,50 @@ try {
   });
   const page = await context.newPage();
   await page.goto(`http://localhost:${http.address().port}`);
-  const result = await page.evaluate(async () => {
+  const requestAssertion = () => page.evaluate(async () => {
     const challenge = new Uint8Array(32).fill(19);
-    const credential = await navigator.credentials.get({ publicKey: {
-      rpId: 'localhost', challenge, userVerification: 'required', timeout: 15000
+    const operation = navigator.credentials.get({ publicKey: {
+      rpId: 'localhost', challenge, userVerification: 'required', timeout: 15000,
+      allowCredentials: [{ type: 'public-key', id: new TextEncoder().encode('software-test-credential') }]
     }});
-    return credential.toJSON();
+    let timer;
+    try {
+      const credential = await Promise.race([operation, new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Bridge completion did not settle within 10 seconds')), 10000);
+      })]);
+      return { credential: credential.toJSON() };
+    } catch (error) {
+      return { error: { name: error.name, message: error.message } };
+    } finally {
+      clearTimeout(timer);
+    }
   });
+  const rejectNullResponse = process.env.REJECT_NULL_RESPONSE === '1';
+  if (rejectNullResponse) {
+    const rejected = await requestAssertion();
+    assert.deepEqual(rejected.error, {
+      name: 'UnknownError', message: 'The passkey request could not be completed.'
+    });
+  }
+  const completed = await requestAssertion();
+  assert.equal(completed.error, undefined, JSON.stringify(completed.error));
+  const result = completed.credential;
   assert.equal(result.type, 'public-key');
   assert.ok(result.response.signature);
-  assert.equal(JSON.parse(Buffer.from(result.response.clientDataJSON, 'base64url')).origin,
-    `http://localhost:${http.address().port}`);
+  assert.equal(result.id, Buffer.from('software-test-credential').toString('base64url'));
+  assert.equal(result.response.userHandle ?? null, process.env.INCLUDE_USER_HANDLE === '1'
+    ? Buffer.from('software-test-user').toString('base64url') : null);
+  assert.deepEqual(JSON.parse(Buffer.from(result.response.clientDataJSON, 'base64url')), {
+    type: 'webauthn.get', challenge: Buffer.alloc(32, 19).toString('base64url'),
+    origin: `http://localhost:${http.address().port}`, crossOrigin: false
+  });
   await options.locator('#disconnect').click();
   await options.waitForFunction(async () => {
     const result = await chrome.runtime.sendMessage({ type: 'status' });
     return !result.status.attached && result.status.state === 'disconnected';
   });
   process.stdout.write(JSON.stringify({ browser: context.browser().version(), intercepted: true,
-    assertionReturned: true, detached: true }) + '\n');
+    assertionReturned: true, rejectionResolved: rejectNullResponse, detached: true }) + '\n');
 } finally {
   if (context) await context.close();
   await new Promise(resolve => http.close(resolve));
