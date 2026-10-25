@@ -1,0 +1,47 @@
+:root {
+  color-scheme: light dark;
+  font: 15px/1.5 system-ui, sans-serif;
+}
+body {
+  margin: 0;
+  min-width: 340px;
+}
+main {
+  max-width: 560px;
+  padding: 24px;
+}
+h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
+}
+form {
+  display: grid;
+  gap: 10px;
+}
+input, button {
+  box-sizing: border-box;
+  padding: 9px 12px;
+  font: inherit;
+}
+input {
+  min-width: 0;
+  width: 100%;
+}
+button {
+  cursor: pointer;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+#status {
+  border-inline-start: 3px solid currentColor;
+  padding-inline-start: 12px;
+  overflow-wrap: anywhere;
+}
+.note {
+  font-size: 13px;
+  opacity: .8;
+}

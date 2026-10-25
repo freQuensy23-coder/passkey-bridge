@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "passkey-bridge"
+version = "0.1.0"
+description = "Explicitly paired remote WebAuthn sign-in with local macOS hybrid transport"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = ["websockets>=15,<17", "bleak>=1,<4", "cryptography>=44,<49", "cbor2>=5.6,<7", "fido2>=2.2.1,<3", "PyQRCode>=1.2.1,<2"]
+
+[project.scripts]
+passkey-bridge = "passkey_bridge.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.12", "build>=1.2"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/passkey_bridge"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"extension" = "passkey_bridge/extension"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

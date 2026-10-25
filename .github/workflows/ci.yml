@@ -1,0 +1,51 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: uv sync --frozen --dev --python '${{ matrix.python }}'
+      - run: uv run ruff check src/passkey_bridge --exclude vendor
+      - run: uv run pytest -q
+        env:
+          CHROME_BIN: ''
+      - run: node --test tests/extension.test.mjs
+      - run: uv build
+      - run: uv run python -c "from pathlib import Path; import zipfile; p=next(Path('dist').glob('*.whl')); z=zipfile.ZipFile(p); assert 'passkey_bridge/extension/manifest.json' in z.namelist()"
+      - if: runner.os == 'macOS'
+        run: uv run python -c "from bleak.backends.corebluetooth.scanner import BleakScannerCoreBluetooth; from passkey_bridge.backend import authenticate; print('macOS CoreBluetooth backend imported successfully')"
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: uv sync --frozen --dev --python '3.13'
+      - run: npm ci --ignore-scripts
+      - run: npx browsers install chrome@stable --path "$RUNNER_TEMP/passkey-chrome"
+      - run: node tests/chrome-path.mjs >> "$GITHUB_ENV"
+      - run: uv run pytest tests/test_browser_integration.py -q -s
+        env:
+          PASSKEY_BROWSER_TEST: '1'
