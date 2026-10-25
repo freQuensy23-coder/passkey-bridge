@@ -159,7 +159,7 @@ def install_simulated_radio_and_tunnel(monkeypatch, *, block_response=False, sta
         assert state["qr"][5] == "ga"
     class Scanner:
         def __init__(self, **kwargs):
-            assert "0000fff9-0000-1000-8000-00805f9b34fb" in kwargs["service_uuids"]
+            self.service_filter = kwargs.get("service_uuids")
         async def __aenter__(self):
             state["scanning"] = True
             return self
@@ -170,8 +170,12 @@ def install_simulated_radio_and_tunnel(monkeypatch, *, block_response=False, sta
         async def stop(self):
             await self.__aexit__()
         async def advertisement_data(self):
+            # Real phones can advertise the UUID only in the Service Data AD
+            # field. Bleak filters against the separate service UUIDs list.
+            if self.service_filter:
+                return
             for raw in (b"short", bytes(20), advert(state["qr"][1], eid)):
-                yield None, SimpleNamespace(service_data={"0000fff9-0000-1000-8000-00805f9b34fb": raw})
+                yield None, SimpleNamespace(service_uuids=[], service_data={"0000fff9-0000-1000-8000-00805f9b34fb": raw})
     def connect(url, **kwargs):
         assert state["scanner_closed"]
         expected_id = derive(state["qr"][1], 2)[:16].hex()
