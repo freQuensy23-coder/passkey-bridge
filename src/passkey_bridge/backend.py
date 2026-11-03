@@ -37,6 +37,11 @@ class BackendError(ValueError):
     pass
 
 
+def _progress(message):
+    if os.environ.get("PASSKEY_BRIDGE_DEBUG") == "1":
+        print(f"[{time.strftime('%H:%M:%S')}] {message}", file=sys.stderr, flush=True)
+
+
 def _derive(secret, purpose, salt=b""):
     return HKDF(algorithm=hashes.SHA256(), length=64, salt=salt, info=purpose.to_bytes(4, "little")).derive(secret)
 
@@ -61,8 +66,11 @@ def _tunnel_domain(domain_id):
 
 
 def _decrypt_eid(key, advert):
-    if not isinstance(advert, bytes) or len(advert) != 20:
+    if not isinstance(advert, bytes) or not 20 <= len(advert) <= MAX_FRAME_SIZE:
         return None
+    # QR mode advertises only the tunnel transport. CTAP hybrid requires us to
+    # authenticate the first 20 bytes and ignore an optional advertisement suffix.
+    advert = advert[:20]
     if not hmac.compare_digest(hmac.new(key[32:], advert[:16], hashlib.sha256).digest()[:4], advert[16:]):
         return None
     decryptor = Cipher(algorithms.AES(key[:32]), modes.ECB()).decryptor()
@@ -95,20 +103,28 @@ def _display_qr(uri):
 
 async def _scan_eid(key):
     try:
-        scanner = BleakScanner(service_uuids=list(SERVICE_UUIDS))
+        # A hybrid advert can carry its UUID only in service_data. Bleak's UUID
+        # filter checks the separate advertised-services list before delivering
+        # service_data (including on CoreBluetooth), so filter after reception.
+        scanner = BleakScanner()
         cancelled = False
+        candidates = 0
         try:
             await scanner.start()
+            _progress("Bluetooth scanner started; waiting for the phone")
             async for _, advertisement in scanner.advertisement_data():
                 for uuid, raw in advertisement.service_data.items():
                     if uuid.lower() in SERVICE_UUIDS:
+                        candidates += 1
                         eid = _decrypt_eid(key, raw)
                         if eid is not None:
+                            _progress("Matching authenticated phone Bluetooth advertisement received")
                             return eid
         except asyncio.CancelledError:
             cancelled = True
             raise
         finally:
+            _progress(f"Bluetooth scan finished; hybrid advertisements received: {candidates}")
             try:
                 async with asyncio.timeout(2):
                     await scanner.stop()
@@ -166,8 +182,10 @@ async def _hybrid_assertion(context):
     uri = f"wss://{domain}/cable/connect/{eid[11:14].hex()}/{tunnel_id.hex()}"
     handshake = NoiseHandshake(pattern=PATTERN_KN_PSK0, role="initiator", local_static=static,
         psk=_derive(secret, 3, eid)[:32])
+    _progress("Connecting to the phone's hybrid TLS tunnel")
     async with connect(uri, subprotocols=["fido.cable"], origin=f"wss://{domain}", proxy=None,
         max_size=MAX_FRAME_SIZE, max_queue=4, open_timeout=10, close_timeout=2, ping_interval=20) as websocket:
+        _progress("Hybrid TLS tunnel connected; starting Noise handshake")
         session = None
         try:
             await websocket.send(handshake.write_message())
@@ -176,6 +194,7 @@ async def _hybrid_assertion(context):
                 if len(reply) != 81 or handshake.read_message(reply) != b"":
                     raise BackendError("Invalid hybrid Noise handshake response")
                 session = handshake.finish()
+                _progress("Hybrid Noise handshake completed")
                 post_handshake = _load_cbor(unpad_message(session.receive_cipher.decrypt_with_ad(b"", await _receive(websocket))))
             if not isinstance(post_handshake, dict) or "ctap" not in post_handshake.get(3, ["ctap"]):
                 raise BackendError("Phone does not support CTAP over hybrid")
@@ -184,6 +203,7 @@ async def _hybrid_assertion(context):
                 raise BackendError("Invalid cached authenticatorGetInfo")
             payload = b"\x01\x02" + cbor2.dumps(_assertion_parameters(context, info), canonical=True)
             await websocket.send(session.send_cipher.encrypt_with_ad(b"", pad_message(payload)))
+            _progress("CTAP GetAssertion sent; waiting for phone approval")
             while True:
                 frame = unpad_message(session.receive_cipher.decrypt_with_ad(b"", await _receive(websocket)))
                 if not frame:
@@ -196,6 +216,7 @@ async def _hybrid_assertion(context):
                     raise BackendError("Unexpected hybrid frame type")
                 if frame[1] != 0:
                     raise BackendError(f"Phone CTAP GetAssertion failed with status 0x{frame[1]:02x}")
+                _progress("Phone assertion received")
                 return _load_cbor(frame[2:])
         finally:
             if session is not None:
@@ -270,8 +291,11 @@ async def authenticate(request_details: dict, *, confirm=True) -> dict:
         async with asyncio.timeout(context["timeout_ms"] / 1000):
             if confirm:
                 await _confirm(context)
+                _progress("Local consent accepted")
             assertion = await _hybrid_assertion(context)
-            return validate_assertion(context, assertion)
+            result = validate_assertion(context, assertion)
+            _progress("Assertion validated; returning it to the remote browser")
+            return result
     except TimeoutError as exc:
         raise BackendError("Passkey request timed out") from exc
     except (BackendError, ValidationError, asyncio.CancelledError):
